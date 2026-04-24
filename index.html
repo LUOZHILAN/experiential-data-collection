@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>携程智旅 3.0 | 全域节点动态打包与体感采集闭环</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --ctrip-blue: #0086F6; --ctrip-dark: #002244; --ctrip-light: #E6F4FF;
+            --bg-color: #f4f7f9; --card-bg: #ffffff; --danger: #FF3B30;
+            --warning: #FFA100; --success: #00C269; --text-main: #333333;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+        body { background-color: var(--bg-color); padding: 20px; color: var(--text-main); display: flex; flex-direction: column; height: 100vh;}
+
+        /* ================= 顶部导航 ================= */
+        .header { background: var(--card-bg); padding: 15px 24px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; border-left: 5px solid var(--ctrip-blue); flex-shrink: 0; }
+        .header h1 { font-size: 20px; font-weight: 700; color: var(--ctrip-dark); }
+        .live-status { background: var(--ctrip-light); color: var(--ctrip-blue); padding: 6px 15px; border-radius: 20px; font-size: 13px; font-weight: bold; display: flex; align-items: center; gap: 8px; }
+        .pulse { width: 8px; height: 8px; background: var(--success); border-radius: 50%; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 194, 105, 0.7); } 70% { box-shadow: 0 0 0 6px rgba(0, 194, 105, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 194, 105, 0); } }
+
+        .layout-grid { display: grid; grid-template-columns: 360px 1fr; gap: 24px; flex: 1; overflow: hidden; }
+
+        /* ================= 左侧：手机原型 ================= */
+        .phone-container { background: var(--card-bg); border-radius: 16px; padding: 20px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); display: flex; flex-direction: column; align-items: center; position: relative;}
+        .phone-title { width: 100%; font-size: 15px; font-weight: bold; margin-bottom: 15px; color: var(--ctrip-blue); display: flex; justify-content: space-between;}
+        .iphone-frame { width: 330px; height: 680px; border: 12px solid #1c1c1e; border-radius: 40px; position: relative; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.15); background: #fff; }
+        #map { width: 100%; height: 100%; z-index: 1; }
+
+        /* App 启动欢迎页 */
+        .app-splash { position: absolute; inset: 0; background: #ffffff; z-index: 150; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.5s ease, transform 0.5s ease; }
+        .app-splash.hidden { opacity: 0; pointer-events: none; transform: scale(1.05); }
+        .splash-logo { margin-bottom: 20px; width: 160px;}
+        .splash-title { font-size: 18px; font-weight: 800; margin-bottom: 8px; color: var(--ctrip-blue);}
+        .splash-subtitle { font-size: 13px; color: #666; font-weight: bold; margin-bottom: 40px;}
+        .splash-loader-wrap { width: 100px; height: 4px; background: #f0f0f0; border-radius: 2px; overflow: hidden; position: relative;}
+        .splash-loader-bar { position: absolute; top: 0; left: 0; width: 40%; height: 100%; background: var(--ctrip-blue); border-radius: 2px; animation: loadingBar 1.2s infinite ease-in-out; }
+        @keyframes loadingBar { 0% { left: -40%; } 100% { left: 100%; } }
+
+        /* 行程单 */
+        .itinerary-sheet { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); z-index: 200; display: flex; align-items: flex-end; opacity: 0; pointer-events: none; transition: opacity 0.3s; }
+        .itinerary-sheet.show { opacity: 1; pointer-events: all; }
+        .itinerary-content { background: #fff; width: 100%; max-height: 85%; border-radius: 24px 24px 0 0; padding: 20px; transform: translateY(100%); transition: transform 0.4s; display: flex; flex-direction: column; }
+        .itinerary-sheet.show .itinerary-content { transform: translateY(0); }
+        .iti-title { font-size: 16px; font-weight: bold; color: var(--ctrip-dark); margin-bottom: 5px; display: flex; align-items: center; gap: 8px;}
+        .iti-sub { font-size: 12px; color: #666; margin-bottom: 15px; }
+        .timeline { list-style: none; padding-left: 10px; margin-bottom: 20px; flex: 1; overflow-y: auto;}
+        .timeline li { position: relative; padding-bottom: 20px; padding-left: 20px; }
+        .timeline li::before { content: ''; position: absolute; left: 0; top: 5px; width: 10px; height: 10px; border-radius: 50%; background: var(--ctrip-blue); z-index: 2;}
+        .timeline li::after { content: ''; position: absolute; left: 4px; top: 15px; width: 2px; height: 100%; background: #e0e0e0; z-index: 1;}
+        .timeline li:last-child::after { display: none; }
+        .iti-time { font-size: 11px; color: #888; font-weight: bold;}
+        .iti-poi { font-size: 14px; font-weight: bold; color: #333; margin-top: 2px;}
+        .iti-desc { font-size: 12px; color: #666; margin-top: 2px;}
+
+        /* 隐私授权 */
+        .privacy-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.4); z-index: 500; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.3s; }
+        .privacy-overlay.show { opacity: 1; pointer-events: all; }
+        .privacy-box { background: rgba(255, 255, 255, 0.95); width: 80%; border-radius: 16px; text-align: center; transform: scale(0.9); transition: transform 0.3s; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+        .privacy-overlay.show .privacy-box { transform: scale(1); }
+        .privacy-icon { font-size: 32px; color: var(--ctrip-blue); margin-top: 20px; }
+        .privacy-title { font-weight: bold; font-size: 15px; margin: 10px 15px 5px;}
+        .privacy-desc { font-size: 12px; color: #666; margin: 0 20px 20px; line-height: 1.5; }
+        .privacy-actions { display: flex; flex-direction: column; border-top: 1px solid rgba(0,0,0,0.1); }
+        .privacy-btn { background: none; border: none; padding: 12px; font-size: 15px; cursor: pointer; }
+        .privacy-allow { font-weight: bold; color: var(--ctrip-blue); border-bottom: 1px solid rgba(0,0,0,0.1); }
+
+        /* LBS 问卷弹窗 */
+        .phone-modal-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); z-index: 100; display: flex; align-items: flex-end; opacity: 0; pointer-events: none; transition: opacity 0.3s; }
+        .phone-modal-overlay.show { opacity: 1; pointer-events: all; }
+        .phone-modal-content { background: #fff; width: 100%; border-radius: 20px 20px 0 0; display: flex; flex-direction: column; transform: translateY(100%); transition: transform 0.4s; }
+        .phone-modal-overlay.show .phone-modal-content { transform: translateY(0); }
+        .p-modal-header { background: linear-gradient(135deg, var(--ctrip-blue), #0067CC); padding: 15px; color: white; border-radius: 20px 20px 0 0; display: flex; align-items: center; gap: 10px; }
+        .p-modal-icon { font-size: 24px; background: rgba(255,255,255,0.2); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 50%; }
+        .p-modal-title { font-weight: bold; font-size: 15px; }
+        .p-modal-body { padding: 15px; }
+        .trigger-tag { background: #e8f5e9; color: #2e7d32; padding: 8px 10px; border-radius: 6px; font-size: 12px; font-weight: bold; margin-bottom: 15px; display: flex; align-items: center; gap: 5px; }
+        .q-text { font-size: 16px; font-weight: bold; margin-bottom: 12px; color: #111; line-height: 1.4;}
+        .opt-btn { background: #f8f9fa; border: 1px solid #eee; padding: 12px; border-radius: 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: 0.2s;}
+        .opt-btn:active { transform: scale(0.98); background: var(--ctrip-light); border-color: var(--ctrip-blue);}
+        .opt-emoji { font-size: 24px; }
+        .opt-text { font-size: 14px; font-weight: bold; color: #333;}
+        
+        .overlay-success { position: absolute; inset: 0; background: rgba(255,255,255,0.95); z-index: 200; display: none; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+
+        /* ================= 右侧：控制台 ================= */
+        .dashboard { display: flex; flex-direction: column; gap: 15px; overflow-y: auto; padding-right: 10px; }
+        .card { background: var(--card-bg); border-radius: 12px; padding: 18px; box-shadow: 0 2px 10px rgba(0,0,0,0.03); border: 1px solid #f0f0f0;}
+        .card-title { font-size: 15px; font-weight: bold; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #f5f5f5; padding-bottom: 10px; }
+
+        .control-grid { display: flex; flex-direction: column; gap: 10px; }
+        .select-box { padding: 10px; border-radius: 8px; border: 1px solid #ddd; font-size: 14px; outline: none; background: #fffce8; color: #d95300; font-weight: bold;}
+        .btn { padding: 12px; border: none; border-radius: 8px; font-size: 14px; font-weight: bold; cursor: pointer; color: white; display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.3s;}
+        
+        .btn-step1 { background: var(--ctrip-dark); }
+        .btn-step2 { background: var(--ctrip-blue); }
+        .btn-step4 { background: var(--danger); box-shadow: 0 4px 10px rgba(255,59,48,0.3);}
+        .btn:disabled { opacity: 0.4; cursor: not-allowed; filter: grayscale(80%); box-shadow: none;}
+        .btn:not(:disabled):hover { transform: translateY(-2px); box-shadow: 0 6px 15px rgba(0,0,0,0.15);}
+
+        .kpi-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
+        .kpi-box { border-radius: 8px; padding: 15px; border-left: 4px solid var(--ctrip-blue); background: #fdfdfd; box-shadow: 0 1px 4px rgba(0,0,0,0.02); transition: all 0.3s;}
+        .kpi-val { font-size: 24px; font-weight: 800; margin: 5px 0; color: var(--ctrip-dark); }
+        .kpi-label { font-size: 12px; color: #777; }
+
+        .console-box { background: #1e1e1e; border-radius: 8px; padding: 12px; height: 180px; overflow-y: auto; font-family: 'Courier New', monospace; font-size: 12px; color: #d4d4d4; }
+        .log-time { color: #569cd6; }
+        .log-alert { color: #ff5252; font-weight: bold; }
+
+        .custom-user-marker { background: transparent; border: none; }
+        .user-marker-container { width: 80px; height: 80px; position: relative; display: flex; align-items: center; justify-content: center; }
+        .user-marker-core { background: var(--success); width: 40px; height: 40px; border-radius: 50%; border: 3px solid white; box-shadow: 0 0 15px rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; color: white; font-size: 20px; z-index: 2; transition: background 0.3s;}
+        .user-marker-pulse { position: absolute; width: 100%; height: 100%; background: rgba(0, 194, 105, 0.4); border-radius: 50%; animation: radarPulse 1.5s infinite ease-out; z-index: 1; }
+        @keyframes radarPulse { 0% { transform: scale(0.4); opacity: 1; } 100% { transform: scale(1.5); opacity: 0; } }
+        .poi-marker { font-size: 32px; line-height: 1; filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3));}
+
+        /* ================= 单次行程体验账单弹窗 ================= */
+        .individual-modal-overlay { 
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0, 15, 30, 0.6); backdrop-filter: blur(3px); 
+            z-index: 8000; 
+            display: none; 
+            align-items: center; justify-content: center; 
+            opacity: 0; transition: opacity 0.3s ease; 
+        }
+        .individual-modal-overlay.show { opacity: 1; }
+        .individual-modal-container { 
+            background: #fff; width: 600px; max-width: 90vw; border-radius: 16px; 
+            overflow: hidden; display: flex; flex-direction: column; 
+            transform: scale(0.95); transition: transform 0.3s; box-shadow: 0 20px 40px rgba(0,0,0,0.3); 
+        }
+        .individual-modal-overlay.show .individual-modal-container { transform: scale(1); }
+        
+        .i-header { background: #f8f9fa; padding: 20px 30px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .i-header h2 { font-size: 1.2rem; margin: 0; color: var(--ctrip-dark); display: flex; align-items: center; gap: 10px; }
+        .i-body { padding: 30px; background: #fff;}
+        .i-receipt { background: #fafafa; border: 1px solid #eee; border-radius: 12px; padding: 20px; margin-bottom: 20px;}
+        
+        .receipt-item { display: flex; align-items: center; gap: 15px; padding: 15px 0; border-bottom: 1px dashed #ddd;}
+        .receipt-item:last-child { border-bottom: none; }
+        .r-icon { font-size: 24px; width: 40px; text-align: center;}
+        .r-content { flex: 1; }
+        .r-poi { font-weight: bold; font-size: 15px; color: #333; margin-bottom: 4px;}
+        .r-ans { font-size: 13px; color: #666; display: flex; align-items: center; gap: 5px;}
+        .r-tag { padding: 4px 10px; border-radius: 6px; font-size: 12px; font-weight: bold;}
+        
+        .i-footer-note { background: #fffce8; border-left: 4px solid var(--warning); padding: 12px 15px; border-radius: 6px; font-size: 13px; color: #d95300; display: flex; align-items: center; gap: 10px; line-height: 1.5;}
+
+        /* ================= 全局压测大屏弹窗 ================= */
+        .global-modal-overlay { 
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
+            background: rgba(0, 15, 30, 0.8); backdrop-filter: blur(5px); 
+            z-index: 9999; 
+            display: none; 
+            align-items: center; justify-content: center; 
+            opacity: 0; transition: opacity 0.3s ease; 
+        }
+        .global-modal-overlay.show { opacity: 1; }
+        .global-modal-container { background: #f4f7f9; width: 1000px; max-width: 95vw; max-height: 90vh; border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; transform: scale(0.95) translateY(20px); transition: transform 0.3s; box-shadow: 0 30px 60px rgba(0,0,0,0.4); }
+        .global-modal-overlay.show .global-modal-container { transform: scale(1) translateY(0); }
+        
+        .g-header { background: linear-gradient(135deg, #002244 0%, #0066cc 100%); padding: 20px 30px; color: white; display: flex; justify-content: space-between; align-items: center; transition: background 0.5s; }
+        .g-header.header-danger { background: linear-gradient(135deg, #b71c1c 0%, #d32f2f 100%); }
+        .g-header h2 { font-size: 1.5rem; margin: 0; font-weight: bold; }
+        .g-close { background: rgba(255,255,255,0.2); border: none; color: white; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; transition: 0.2s; }
+        
+        .g-body { padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px;}
+        .g-kpi-row { display: flex; gap: 20px; }
+        .g-kpi-card { flex: 1; background: white; padding: 20px; border-radius: 12px; text-align: center; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .g-kpi-val { font-size: 2rem; font-weight: bold; margin-top: 10px;}
+        
+        .g-content-grid { display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 20px; }
+        .g-chart-box { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .chart-wrapper { position: relative; height: 260px; width: 100%; display: flex; justify-content: center;}
+        
+        .g-ai-box { background: #002244; color: white; padding: 25px; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.15); transition: background 0.5s;}
+        .g-ai-box.ai-danger { background: #3e0b0b; border: 2px solid #ff5252;}
+        .g-ai-tag { display: inline-block; padding: 6px 15px; border-radius: 20px; font-weight: bold; font-size: 14px; margin-bottom: 15px; background: rgba(255,255,255,0.15);}
+        .g-ai-tag.tag-danger { background: #ff5252; color: white;}
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>携程智旅 3.0 | 全域节点动态打包与体感采集闭环</h1>
+        <div class="live-status"><div class="pulse"></div> AI 大模型与 LBS 底层连通</div>
+    </div>
+
+    <div class="layout-grid">
+        <div class="phone-container">
+            <div class="phone-title"><span>📱 携程 App (C端用户旅程)</span></div>
+            <div class="iphone-frame">
+                
+                <div class="app-splash" id="appSplash">
+                    <img src="https://pic.c-ctrip.com/common/c_logo2013.png" alt="Ctrip Logo" class="splash-logo">
+                    <div class="splash-title">一键打包</div>
+                    <div class="splash-subtitle">开始您的专属之旅</div>
+                    <div class="splash-loader-wrap">
+                        <div class="splash-loader-bar"></div>
+                    </div>
+                </div>
+
+                <div id="map"></div>
+
+                <div class="itinerary-sheet" id="itinerarySheet">
+                    <div class="itinerary-content">
+                        <div class="iti-title"><i class="fas fa-magic"></i> <span id="ui-iti-title">TripGenie 专属规划</span></div>
+                        <div class="iti-sub" id="ui-iti-desc">加载中...</div>
+                        <ul class="timeline" id="ui-timeline"></ul>
+                        <div style="text-align: center; color: var(--ctrip-blue); font-size: 12px; font-weight: bold; margin-top: 10px;">
+                            请在右侧控制台点击【步骤2】开启伴随
+                        </div>
+                    </div>
+                </div>
+
+                <div class="privacy-overlay" id="privacyModal">
+                    <div class="privacy-box">
+                        <div class="privacy-icon"><i class="fas fa-location-arrow"></i></div>
+                        <div class="privacy-title">开启智能位置服务</div>
+                        <div class="privacy-desc">需要获取您的定位，以便在到达各个节点时自动收集体验反馈，完善闭环。</div>
+                        <div class="privacy-actions"><button class="privacy-btn privacy-allow" onclick="handlePermission()">允许并在后台运行</button></div>
+                    </div>
+                </div>
+                
+                <div class="phone-modal-overlay" id="phoneModal">
+                    <div class="phone-modal-content">
+                        <div class="p-modal-header">
+                            <div class="p-modal-icon" id="pm-icon">🏛️</div>
+                            <div class="p-modal-title" id="pm-title">刚游完某地</div>
+                        </div>
+                        <div class="p-modal-body">
+                            <div class="trigger-tag"><i class="fas fa-location-arrow"></i> LBS 离场判定触发</div>
+                            <div class="q-text" id="pm-question"></div>
+                            <div id="pm-options"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="overlay-success" id="phoneOverlay"></div>
+            </div>
+        </div>
+
+        <div class="dashboard">
+            <div class="card">
+                <div class="card-title"><i class="fas fa-sliders-h"></i> 业务闭环演练沙盘 (千人千面)</div>
+                <select class="select-box" id="traveler-type" onchange="changeTravelerType()">
+                    <option value="family">👨‍👩‍👧‍👦 注入客群：带娃家庭 (关注无障碍与亲子)</option>
+                    <option value="elderly">👴👵 注入客群：银发族 (关注体力与舒适度)</option>
+                    <option value="photo">📷 注入客群：观光打卡 (关注出片与环境)</option>
+                </select>
+                
+                <div class="control-grid" style="margin-top: 15px;">
+                    <button class="btn btn-step1" id="btn-step1" onclick="step1_Generate()"><i class="fas fa-box-open"></i> [步骤 1] AI 动态打包三节点行程</button>
+                    <button class="btn btn-step2" id="btn-step2" disabled onclick="step2_StartCruise()"><i class="fas fa-car-side"></i> [步骤 2] 开启全链路 LBS 节点采集</button>
+                    <button class="btn btn-step4" id="btn-step4" disabled onclick="step4_NukeTest()"><i class="fas fa-bomb"></i> [最终步] 注入 3×1000 份并发，激活 RLHF</button>
+                </div>
+            </div>
+
+            <div class="kpi-row">
+                <div class="kpi-box" id="kpi-box-total">
+                    <div class="kpi-label">已入库体感标签总数</div>
+                    <div class="kpi-val" id="kpi-total">1,024</div>
+                </div>
+                <div class="kpi-box">
+                    <div class="kpi-label">预期转化率提升</div>
+                    <div class="kpi-val" style="color: var(--success);">+42.5%</div>
+                </div>
+                <div class="kpi-box" id="kpi-box-rate">
+                    <div class="kpi-label">全游程总体异常率</div>
+                    <div class="kpi-val" id="kpi-rate" style="color: var(--ctrip-blue);">0%</div>
+                </div>
+            </div>
+
+            <div class="card" style="padding: 15px; flex: 1;">
+                <div class="card-title"><i class="fas fa-terminal"></i> 动态数据流水线 (Stream)</div>
+                <div class="console-box" id="console-log" style="height: 100%;">
+                    <div class="log-entry"><span class="log-time">[System]</span> 引擎初始化. 请选择客群并点击【步骤1】...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="individual-modal-overlay" id="individualSummaryModal">
+        <div class="individual-modal-container">
+            <div class="i-header">
+                <h2><i class="fas fa-clipboard-check" style="color:var(--success)"></i> 单次游程诊断报告 (个人个体样本)</h2>
+                <button class="btn" style="background:transparent; color:#999; padding:0;" onclick="closeIndividualSummary()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="i-body">
+                <div style="margin-bottom: 15px; font-weight: bold; color: var(--ctrip-dark);">当前客群图谱：<span id="ind-type" style="color:var(--ctrip-blue);"></span></div>
+                <div class="i-receipt" id="ind-receipt-list">
+                    </div>
+                <div class="i-footer-note">
+                    <i class="fas fa-info-circle"></i> 
+                    <span><b>系统提示：</b>该用户的全节点体验数据已入库。由于目前为单一孤证样本，尚未达到算法调整阈值。请在右侧控制台执行【最终步】压测，验证群体的宏观 RLHF 熔断机制。</span>
+                </div>
+                <div style="text-align: center; margin-top: 20px;">
+                    <button class="btn btn-step2" style="width: 200px; margin: 0 auto;" onclick="closeIndividualSummary()">明白，准备并发压测</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="global-modal-overlay" id="globalAnalysisModal">
+        <div class="global-modal-container">
+            <div class="g-header" id="g-header">
+                <h2><i class="fas fa-chart-line"></i> 智能引擎 3.0：全域节点体验分析与策略反哺</h2>
+                <button class="g-close" onclick="closeAnalysis()"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="g-body">
+                <div class="g-kpi-row">
+                    <div class="g-kpi-card">
+                        <div style="color: #777; font-size: 14px; font-weight:bold;">并发压测数据总量 (3节点)</div>
+                        <div class="g-kpi-val" id="g-kpi-session" style="color: var(--ctrip-blue);">0</div>
+                    </div>
+                    <div class="g-kpi-card">
+                        <div style="color: #777; font-size: 14px; font-weight:bold;">特定节点痛点爆出率</div>
+                        <div class="g-kpi-val" id="g-kpi-rate" style="color: var(--danger);">0%</div>
+                    </div>
+                    <div class="g-kpi-card">
+                        <div style="color: #777; font-size: 14px; font-weight:bold;">模型策略调整置信度</div>
+                        <div class="g-kpi-val" style="color: var(--success);">99.8%</div>
+                    </div>
+                </div>
+                
+                <div class="g-content-grid">
+                    <div class="g-chart-box">
+                        <h3 style="font-size: 16px; margin-bottom: 15px; color:#111; text-align: center;" id="bar-title">各游玩节点痛点分布</h3>
+                        <div class="chart-wrapper"><canvas id="barChart"></canvas></div>
+                    </div>
+                    
+                    <div class="g-chart-box">
+                        <h3 style="font-size: 16px; margin-bottom: 15px; color:#111; text-align: center;" id="radar-title">客群敏感度矩阵</h3>
+                        <div class="chart-wrapper"><canvas id="radarChart"></canvas></div>
+                    </div>
+
+                    <div class="g-ai-box" id="g-ai-box">
+                        <div style="font-size: 18px; font-weight: bold; margin-bottom: 20px;"><i class="fas fa-bolt"></i> 策略重构指令</div>
+                        <div id="g-ai-content"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ================= 路线及题库配置 ================= //
+        const COORDS = {
+            start: [22.1400, 113.5600], 
+            f_hotel: [22.1472, 113.5625], f_attr: [22.1977, 113.5409], f_rest: [22.1950, 113.5450],
+            e_hotel: [22.1899, 113.5437], e_attr: [22.1977, 113.5409], e_rest: [22.1920, 113.5420],
+            p_hotel: [22.1435, 113.5620], p_attr: [22.1977, 113.5409], p_rest: [22.1960, 113.5390]
+        };
+
+        const ROUTES = {
+            family: {
+                title: "亲子无忧精华游", desc: "已为您生成【带娃家庭】专属路线。",
+                radarData: [90, 30, 40, 85, 20],
+                nukeAlert: "🚨 酒店与餐厅表现平稳，但【大三巴】节点痛点爆表！",
+                instruction: "1. 强制从【带娃家庭】资源池中剔除“大三巴牌坊”。<br>2. 动态打包时，将其无缝替换为无障碍友好的“路环市区”。",
+                pois: [
+                    { 
+                        name: '威尼斯人度假村', time: '10:00 (第一站: 酒店)', desc: '体验宽敞亲子房', icon: '🏨', coord: COORDS.f_hotel,
+                        q: '👨‍👩‍👧‍👦 您觉得这家酒店的亲子游乐设施完善吗？',
+                        opts: [{ emoji: '😍', text: '非常完善', val: 'positive' }, { emoji: '🙁', text: '不太够用', val: 'negative' }]
+                    },
+                    { 
+                        name: '大三巴牌坊', time: '14:00 (第二站: 景点)', desc: '含部分碎石台阶(隐患)', icon: '🏛️', coord: COORDS.f_attr,
+                        q: '👨‍👩‍👧‍👦 刚才推婴儿车走大三巴的碎石台阶感觉如何？',
+                        opts: [{ emoji: '😊', text: '挺方便的', val: 'positive' }, { emoji: '😫', text: '极度不便(台阶多)', val: 'negative' }]
+                    },
+                    { 
+                        name: '雅辰酒店自助餐', time: '18:00 (第三站: 餐厅)', desc: '提供专属儿童餐具', icon: '🍽️', coord: COORDS.f_rest,
+                        q: '👨‍👩‍👧‍👦 这家餐厅提供足够的儿童座椅和推车空间吗？',
+                        opts: [{ emoji: '👍', text: '空间很大', val: 'positive' }, { emoji: '👎', text: '很拥挤', val: 'negative' }]
+                    }
+                ]
+            },
+            elderly: {
+                title: "银发舒心慢游线", desc: "已为您生成【银发族】适老路线。",
+                radarData: [40, 20, 20, 95, 30],
+                nukeAlert: "🚨 酒店与早茶好评如潮，但【大三巴】评价体力透支！",
+                instruction: "1. 识别到【银发族】在大三巴存在严重体力瓶颈。<br>2. 降权徒步方案，优先打包“开篷巴士观光游”。",
+                pois: [
+                    { 
+                        name: '葡京酒店', time: '10:00 (第一站: 酒店)', desc: '服务周到，隔音好', icon: '🏨', coord: COORDS.e_hotel,
+                        q: '👴👵 昨晚在葡京酒店休息得好吗？床铺舒适度如何？',
+                        opts: [{ emoji: '😊', text: '很舒服', val: 'positive' }, { emoji: '🙁', text: '有些吵闹', val: 'negative' }]
+                    },
+                    { 
+                        name: '大三巴牌坊', time: '14:00 (第二站: 景点)', desc: '含斜坡与台阶(体力隐患)', icon: '🏛️', coord: COORDS.e_attr,
+                        q: '👴👵 走大三巴的 68 级台阶感觉体力消耗大吗？',
+                        opts: [{ emoji: '😊', text: '慢慢走还行', val: 'positive' }, { emoji: '😫', text: '太累了，吃不消', val: 'negative' }]
+                    },
+                    { 
+                        name: '龙华茶楼', time: '18:00 (第三站: 餐厅)', desc: '传统粤式早茶与正餐', icon: '🍵', coord: COORDS.e_rest,
+                        q: '👴👵 这家老字号的饮食口味是否清淡适宜？',
+                        opts: [{ emoji: '👍', text: '很合胃口', val: 'positive' }, { emoji: '👎', text: '太油腻了', val: 'negative' }]
+                    }
+                ]
+            },
+            photo: {
+                title: "网红出片打卡游", desc: "已为您生成【观光打卡】出片路线。",
+                radarData: [20, 40, 90, 30, 95],
+                nukeAlert: "🚨 铁塔与咖啡馆极度出片，但【大三巴】遭遇人流毁片！",
+                instruction: "1. 识别出片群体对极度拥挤极其反感。<br>2. 触发收益管理：引导购买高溢价的“清晨 7:00 独享大三巴”错峰套餐。",
+                pois: [
+                    { 
+                        name: '巴黎人酒店', time: '10:00 (第一站: 酒店)', desc: '窗外直面铁塔景观', icon: '🏨', coord: COORDS.p_hotel,
+                        q: '📷 巴黎人酒店的房间窗外景观出片吗？',
+                        opts: [{ emoji: '😍', text: '超级出片', val: 'positive' }, { emoji: '🙁', text: '视角不好', val: 'negative' }]
+                    },
+                    { 
+                        name: '大三巴牌坊', time: '14:00 (第二站: 景点)', desc: '下午人流极度拥挤(隐患)', icon: '🏛️', coord: COORDS.p_attr,
+                        q: '📷 下午时段大三巴的人流密度影响您拍照吗？',
+                        opts: [{ emoji: '😊', text: '能找到好角度', val: 'positive' }, { emoji: '😫', text: '全是人头没法拍', val: 'negative' }]
+                    },
+                    { 
+                        name: '网红露营咖啡馆', time: '18:00 (第三站: 餐厅)', desc: '高颜值甜品与布景', icon: '☕', coord: COORDS.p_rest,
+                        q: '📷 这家咖啡馆的布景和甜品颜值高吗？',
+                        opts: [{ emoji: '👍', text: '适合发朋友圈', val: 'positive' }, { emoji: '👎', text: '实物与网图不符', val: 'negative' }]
+                    }
+                ]
+            }
+        };
+
+        let state = {
+            map: null, userMarker: null, poiMarkers: [], type: 'family', routeLine: null,
+            activeRoute: null, totalTags: 1024,
+            nodeStats: [ {t:0, n:0}, {t:0, n:0}, {t:0, n:0} ],
+            sessionLog: [] 
+        };
+        
+        let barChart = null; let radarChart = null;
+
+        // ================== 初始化 ================== //
+        window.onload = () => {
+            state.map = L.map('map', { zoomControl: false, attributionControl: false }).setView([22.1700, 113.5500], 13);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(state.map);
+            
+            state.userMarker = L.marker(COORDS.start, { 
+                icon: L.divIcon({ 
+                    className: 'custom-user-marker', 
+                    html: `<div class="user-marker-container"><div class="user-marker-pulse"></div><div class="user-marker-core" id="user-core"><i class="fas fa-street-view"></i></div></div>`,
+                    iconSize: [80, 80], iconAnchor: [40, 40]
+                }), zIndexOffset: 1000
+            }).addTo(state.map);
+
+            changeTravelerType(); 
+        };
+
+        function changeTravelerType() {
+            const select = document.getElementById('traveler-type');
+            state.type = select.value;
+            state.activeRoute = ROUTES[state.type];
+            
+            document.getElementById('btn-step1').disabled = false;
+            document.getElementById('btn-step2').disabled = true;
+            document.getElementById('btn-step4').disabled = true;
+            select.disabled = false;
+
+            // 恢复 Splash 屏
+            document.getElementById('appSplash').classList.remove('hidden');
+            document.getElementById('itinerarySheet').classList.remove('show');
+            
+            state.nodeStats = [ {t:0, n:0}, {t:0, n:0}, {t:0, n:0} ];
+            state.totalTags = 1024;
+            updateKpiBasic();
+            
+            document.getElementById('user-core').style.background = 'var(--success)';
+            state.userMarker.setLatLng(COORDS.start);
+            state.map.setView([22.1700, 113.5500], 13);
+
+            state.poiMarkers.forEach(m => state.map.removeLayer(m));
+            if(state.routeLine) state.map.removeLayer(state.routeLine);
+            state.poiMarkers = [];
+            
+            state.activeRoute.pois.forEach((p, idx) => {
+                let m = L.marker(p.coord, { icon: L.divIcon({ className: 'poi-marker', html: p.icon }) }).addTo(state.map);
+                state.poiMarkers.push(m);
+                // 给大三巴画预警圈
+                if(idx === 1) {
+                    let c = L.circle(p.coord, { color: '#FF3B30', fillOpacity: 0.1, radius: 250, weight:1 }).addTo(state.map);
+                    state.poiMarkers.push(c);
+                }
+            });
+
+            logConsole(`[Engine] 切换计算图谱至【${state.activeRoute.title}】，等待加载...`);
+        }
+
+        // ================== 控制流 ================== //
+
+        function step1_Generate() {
+            document.getElementById('btn-step1').disabled = true;
+            document.getElementById('traveler-type').disabled = true;
+            logConsole(`[TripGenie] 正在调用大模型生成动态行程单...`);
+
+            // 隐藏启动页
+            document.getElementById('appSplash').classList.add('hidden');
+            
+            let latlngs = [COORDS.start, ...state.activeRoute.pois.map(p=>p.coord)];
+            state.routeLine = L.polyline(latlngs, {color: '#0086F6', weight: 4, dashArray: '10, 10'}).addTo(state.map);
+
+            document.getElementById('ui-iti-title').innerText = state.activeRoute.title;
+            document.getElementById('ui-iti-desc').innerText = state.activeRoute.desc;
+            
+            let listHtml = '';
+            state.activeRoute.pois.forEach((p, idx) => {
+                listHtml += `<li>
+                    <div class="iti-time">${p.time}</div><div class="iti-poi">${p.name}</div><div class="iti-desc">${p.desc}</div>
+                </li>`;
+            });
+            document.getElementById('ui-timeline').innerHTML = listHtml;
+
+            setTimeout(() => {
+                document.getElementById('itinerarySheet').classList.add('show');
+                logConsole(`[Success] 动态包裹下发成功.`);
+                document.getElementById('btn-step2').disabled = false;
+            }, 600);
+        }
+
+        function step2_StartCruise() {
+            document.getElementById('btn-step2').disabled = true;
+            document.getElementById('itinerarySheet').classList.remove('show');
+            setTimeout(() => {
+                logConsole(`[Privacy] 弹起系统级权限请求.`);
+                document.getElementById('privacyModal').classList.add('show');
+            }, 400);
+        }
+
+        function handlePermission() {
+            document.getElementById('privacyModal').classList.remove('show');
+            logConsole(`[Privacy] 授权获取. 开启全程节点动态 LBS 采集.`, true);
+            executeFullJourney();
+        }
+
+        function moveMarker(target, zoom, duration) {
+            return new Promise(res => {
+                state.map.flyTo(target, zoom, { duration: duration/1000 });
+                const start = state.userMarker.getLatLng();
+                const startTime = Date.now();
+                function step() {
+                    let p = (Date.now() - startTime) / duration;
+                    if (p > 1) p = 1;
+                    const lat = start.lat + (target[0] - start.lat) * p;
+                    const lng = start.lng + (target[1] - start.lng) * p;
+                    state.userMarker.setLatLng([lat, lng]);
+                    if (p < 1) requestAnimationFrame(step);
+                    else res();
+                }
+                step();
+            });
+        }
+
+        // 核心：异步阻塞的完整旅程
+        async function executeFullJourney() {
+            state.sessionLog = []; 
+            
+            for (let i = 0; i < state.activeRoute.pois.length; i++) {
+                let p = state.activeRoute.pois[i];
+                
+                // 1. 前往节点
+                logConsole(`[LBS] 正在前往第 ${i+1} 站: ${p.name}...`);
+                if(i === 1) document.getElementById('user-core').style.background = 'var(--danger)'; 
+                else document.getElementById('user-core').style.background = 'var(--success)';
+                
+                await moveMarker(p.coord, 15, 1500);
+                logConsole(`✅ 已到达 ${p.name}，停留体验中...`);
+                await new Promise(r => setTimeout(r, 1000));
+                
+                // 2. 模拟离场触发弹窗
+                logConsole(`[LBS] 检测到离开 ${p.name} 围栏，拦截下发问卷!`, true);
+                
+                // 巧妙利用 Promise 阻塞循环，等待用户点击
+                let result = await popQuestion(p);
+                
+                // 3. 处理数据
+                state.totalTags++;
+                state.nodeStats[i].t++;
+                let isNeg = (result.val === 'negative');
+                if(isNeg) state.nodeStats[i].n++;
+                
+                state.sessionLog.push({
+                    poiName: p.name, icon: p.icon,
+                    ansEmoji: result.emoji, ansText: result.text, isNeg: isNeg
+                });
+                
+                logConsole(`[归档] 第 ${i+1} 站采集完成. 标签倾向: ${isNeg?'[痛点]':'[满意]'}`, isNeg);
+                updateKpiBasic();
+                
+                // 给遮罩消失留点时间
+                await new Promise(r => setTimeout(r, 1200)); 
+            }
+            
+            // 行程结束 -> 弹出个人单次报告
+            logConsole(`🎉 全流程节点采集完毕！生成个人体验报告...`);
+            showIndividualSummary();
+        }
+
+        // 弹出问题并返回 Promise
+        function popQuestion(poiData) {
+            return new Promise(resolve => {
+                document.getElementById('pm-title').innerText = `刚体验完 ${poiData.name}`;
+                document.getElementById('pm-icon').innerText = poiData.icon;
+                document.getElementById('pm-question').innerText = poiData.q;
+                
+                let html = '';
+                poiData.opts.forEach(o => {
+                    // 传递所需的选项数据
+                    html += `<div class="opt-btn" onclick="submitAns('${o.val}', '${o.emoji}', '${o.text}')"><span class="opt-emoji">${o.emoji}</span><span class="opt-text">${o.text}</span></div>`;
+                });
+                document.getElementById('pm-options').innerHTML = html;
+                
+                document.getElementById('phoneModal').classList.add('show');
+                window.currentResolve = resolve; // 绑定到全局
+            });
+        }
+
+        window.submitAns = function(val, emoji, text) {
+            document.getElementById('phoneModal').classList.remove('show');
+            
+            const overlay = document.getElementById('phoneOverlay');
+            overlay.innerHTML = `<div style="font-size:50px;margin-bottom:10px;">✅</div><div style="font-weight:bold;font-size:18px;color:var(--ctrip-blue);">反馈已成功提交</div>`;
+            overlay.style.display = 'flex';
+            
+            setTimeout(() => { 
+                overlay.style.display = 'none'; 
+                // 遮罩消失后，resolve 掉 Promise 让循环继续
+                if(window.currentResolve) {
+                    window.currentResolve({val: val, emoji: emoji, text: text});
+                    window.currentResolve = null;
+                }
+            }, 1000);
+        };
+
+        // ================== 新增：单次行程体验报告 ================== //
+        function showIndividualSummary() {
+            const tNames = {family: '带娃家庭', elderly: '银发族', photo: '观光打卡'};
+            document.getElementById('ind-type').innerText = tNames[state.type];
+            
+            const listContainer = document.getElementById('ind-receipt-list');
+            let html = '';
+            state.sessionLog.forEach(log => {
+                let tagClass = log.isNeg ? 'badge-danger' : 'badge-safe';
+                let tagText = log.isNeg ? '异常痛点' : '体验平稳';
+                html += `
+                    <div class="receipt-item">
+                        <div class="r-icon">${log.icon}</div>
+                        <div class="r-content">
+                            <div class="r-poi">${log.poiName}</div>
+                            <div class="r-ans">${log.ansEmoji} ${log.ansText}</div>
+                        </div>
+                        <div class="r-tag ${tagClass}">${tagText}</div>
+                    </div>
+                `;
+            });
+            listContainer.innerHTML = html;
+            
+            // 修复 Bug：通过 JS 修改 display 属性确保可以显示
+            const modal = document.getElementById('individualSummaryModal');
+            modal.style.display = 'flex';
+            void modal.offsetWidth;
+            modal.classList.add('show');
+        }
+
+        window.closeIndividualSummary = function() {
+            const modal = document.getElementById('individualSummaryModal');
+            modal.classList.remove('show');
+            setTimeout(() => { modal.style.display = 'none'; }, 300);
+            
+            // 关闭单次报告后，解锁核弹压测按钮
+            document.getElementById('btn-step4').disabled = false;
+        };
+
+        // ================== 最终核弹压测 ================== //
+        function step4_NukeTest() {
+            document.getElementById('btn-step4').disabled = true;
+            
+            const batchSize = 1000;
+            // 酒店 5%差评, 景点(大三巴) 80%差评, 餐厅 10%差评
+            state.nodeStats[0].t += batchSize; state.nodeStats[0].n += 50; 
+            state.nodeStats[1].t += batchSize; state.nodeStats[1].n += 800; 
+            state.nodeStats[2].t += batchSize; state.nodeStats[2].n += 100; 
+            
+            state.totalTags += (batchSize * 3);
+
+            logConsole(`[TestNode] 🚀 并发注入 3000 个全节点 LBS 回传事件...`);
+            
+            setTimeout(() => {
+                logConsole(`[SystemAlert] <span class="log-alert">${state.activeRoute.nukeAlert}</span>`);
+                updateKpiBasic();
+                setTimeout(() => { triggerGlobalAnalysis(); }, 800);
+            }, 1000);
+        }
+
+        // ================== 通用图表与大屏 ================== //
+        function updateKpiBasic() {
+            document.getElementById('kpi-total').innerText = state.totalTags.toLocaleString();
+            
+            let totalT = state.nodeStats.reduce((sum, s) => sum + s.t, 0);
+            let totalN = state.nodeStats.reduce((sum, s) => sum + s.n, 0);
+            const rate = totalT > 0 ? Math.round((totalN / totalT) * 100) : 0;
+            
+            const rateEl = document.getElementById('kpi-rate');
+            rateEl.innerText = rate + '%';
+            
+            const rateBox = document.getElementById('kpi-box-rate');
+            if (rate >= 20) rateBox.classList.add('danger-mode');
+            else rateBox.classList.remove('danger-mode');
+        }
+
+        function logConsole(msg, hl = false) {
+            const box = document.getElementById('console-log');
+            const time = new Date().toLocaleTimeString('en-US', {hour12:false});
+            box.innerHTML += `<div class="log-entry"><span class="log-time">[${time}]</span> <span style="${hl?'color:#0086F6; font-weight:bold;':''}">${msg}</span></div>`;
+            box.scrollTop = box.scrollHeight;
+        }
+
+        function triggerGlobalAnalysis() {
+            const modal = document.getElementById('globalAnalysisModal');
+            modal.style.display = 'flex'; void modal.offsetWidth; modal.classList.add('show');
+
+            const attrStats = state.nodeStats[1];
+            const rate = Math.round((attrStats.n / attrStats.t) * 100);
+
+            document.getElementById('g-kpi-session').innerText = "3,000";
+            document.getElementById('g-kpi-rate').innerText = rate + '%';
+
+            document.getElementById('g-header').classList.add('header-danger');
+            document.getElementById('g-ai-box').classList.add('ai-danger');
+            
+            let strategy = '<i class="fas fa-exclamation-triangle"></i> RLHF 节点熔断与重构';
+            let desc = `酒店与餐厅节点表现平稳，但【大三巴】节点接收到海量负向奖励信号。<br><br><b>🔴 算法重构指令下发：</b><br>${state.activeRoute.instruction}`;
+
+            document.getElementById('g-ai-content').innerHTML = `
+                <div class="g-ai-tag tag-danger">${strategy}</div>
+                <div style="line-height: 1.8; color:#fff; font-size:15px;">${desc}</div>
+            `;
+
+            setTimeout(() => { 
+                renderBarChart(); 
+                renderRadarChart(state.activeRoute.radarData);
+            }, 500);
+        }
+
+        function renderBarChart() {
+            const ctx = document.getElementById('barChart');
+            if (barChart) barChart.destroy();
+            
+            let rates = state.nodeStats.map(s => s.t > 0 ? Math.round((s.n/s.t)*100) : 0);
+            let names = state.activeRoute.pois.map(p => p.name.substring(0,4));
+
+            barChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: names,
+                    datasets: [{ 
+                        label: '负面痛点预警率 (%)', 
+                        data: rates, 
+                        backgroundColor: rates.map(r => r>50 ? '#FF3B30' : '#00C269'), 
+                        borderRadius: 6 
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, max: 100 } },
+                    animation: { duration: 1500, easing: 'easeOutQuart' }
+                }
+            });
+            document.getElementById('bar-title').innerText = `【${state.activeRoute.title.substring(0,4)}】各节点痛点率`;
+        }
+
+        function renderRadarChart(dataArr) {
+            const ctx = document.getElementById('radarChart');
+            if (radarChart) radarChart.destroy();
+
+            document.getElementById('radar-title').innerText = `【${state.activeRoute.title.substring(0,4)}】敏感度矩阵`;
+
+            radarChart = new Chart(ctx, {
+                type: 'radar',
+                data: {
+                    labels: ['无障碍/设施', '价格敏感度', '光线/时间要求', '体力消耗敏感', '人流拥挤反感'],
+                    datasets: [{
+                        label: '特征权重', data: dataArr,
+                        backgroundColor: 'rgba(0, 134, 246, 0.2)', borderColor: '#0086F6',
+                        pointBackgroundColor: '#0086F6', borderWidth: 2
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    scales: { r: { angleLines:{color:'rgba(0,0,0,0.1)'}, grid:{color:'rgba(0,0,0,0.1)'}, ticks:{display:false} } },
+                    plugins: { legend: { display: false } },
+                    animation: { duration: 1500 }
+                }
+            });
+        }
+
+        function closeAnalysis() {
+            const modal = document.getElementById('globalAnalysisModal');
+            modal.classList.remove('show');
+            setTimeout(() => { modal.style.display = 'none'; }, 400);
+            document.getElementById('traveler-type').disabled = false;
+        }
+
+    </script>
+</body>
+</html>
